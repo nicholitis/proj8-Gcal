@@ -137,6 +137,21 @@ to
         {% endif %}
         </div>
       {% endif %}
+
+      {% if g.free is defined %}
+                {% for time in g.free %}
+                    {% if time.id == event.id %}
+                        <h5> FREE TIMES </h5>
+                        {% for event in  time.free_times %}
+      <div class="row">
+                            BEGINS: {{ event.start | fmtdate}} {{ event.start | fmttime }} ENDS: {{event.end | fmtdate}} {{event.end | fmttime}}
+      </div>
+                        {% endfor %}
+                    {% endif %}
+                {% endfor %}
+            {% endif %}
+
+            
     {% endfor %}
   {% endfor %}
 {% endif %}

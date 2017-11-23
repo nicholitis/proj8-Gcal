@@ -24,6 +24,7 @@ from apiclient import discovery
 # Globals
 ###
 from busy_times import busy_times
+from free_times import free_times, available
 import config
 if __name__ == "__main__":
     CONFIG = config.configuration()
@@ -81,7 +82,10 @@ def choose2():
   gcal_service = get_gcal_service(credentials)
   app.logger.debug("Returned from get_gcal_service")
   flask.g.ids = flask.session["ids"]
-  flask.g.events = list_calendars(gcal_service)
+  flask.g.free = flask.session["free"]
+  flask.g.calendars = list_calendars(gcal_service)
+  flask.g.events = get_events(gcal_service, flask.g.calendars)
+
   return render_template('index.html')
 
 ####
@@ -332,47 +336,92 @@ def next_day(isotext):
 ####
 
 def list_calendars(service):
-    """
-    Given a google 'service' object, return a list of
-    calendars.  Each calendar is represented by a dict.
-    The returned list is sorted to have
-    the primary calendar first, and selected (that is, displayed in
-    Google Calendars web app) calendars before unselected calendars.
-    """
-    app.logger.debug("Entering list_calendars")
-    calendar_list = service.calendarList().list().execute()["items"]
-    result = [ ]
-    for cal in calendar_list:
-        #list events in set date range
-        startdate = flask.session["begin_date"]
-        enddate = flask.session["end_date"]
-        eventslist = service.events().list(calendarId=cal["id"], timeMin=startdate, timeMax=enddate).execute()['items']
-        #only get events within range
-        start = startdate[:11] + arrow.get(flask.session["begin_time"]).time().isoformat() + startdate[19:]
-        end = enddate[:11] + arrow.get(flask.session["end_time"]).time().isoformat() + enddate[19:]
-        app.logger.debug("START: {} to END: {}".format(start, end))
-        events = busy_times(eventslist, start, enddate)
+  """
+  Given a google 'service' object, return a list of
+  calendars.  Each calendar is represented by a dict.
+  The returned list is sorted to have
+  the primary calendar first, and selected (that is, displayed in
+  Google Calendars web app) calendars before unselected calendars.
+  """
+  app.logger.debug("Entering list_calendars")  
+  calendar_list = service.calendarList().list().execute()["items"]
+  result = [ ]
+  for cal in calendar_list:
+      kind = cal["kind"]
+      id = cal["id"]
+      if "description" in cal: 
+          desc = cal["description"]
+      else:
+          desc = "(no description)"
+      summary = cal["summary"]
+      # Optional binary attributes with False as default
+      selected = ("selected" in cal) and cal["selected"]
+      primary = ("primary" in cal) and cal["primary"]
+      
 
-        kind = cal["kind"]
-        id = cal["id"]
-        if "description" in cal:
-            desc = cal["description"]
-        else:
-            desc = "(no description)"
-        summary = cal["summary"]
-        # Optional binary attributes with False as default
-        selected = ("selected" in cal) and cal["selected"]
-        primary = ("primary" in cal) and cal["primary"]
+      result.append(
+        { "kind": kind,
+          "id": id,
+          "summary": summary,
+          "selected": selected,
+          "primary": primary
+          })
 
-        result.append(
-          { "kind": kind,
-            "id": id,
-            "summary": summary,
-            "selected": selected,
-            "primary": primary,
-            "events": events
-            })
-    return sorted(result, key=cal_sort_key)
+  return sorted(result, key=cal_sort_key)
+
+
+def get_events(service, calendars):
+  """
+  Gets a list of busy events in calendar
+  """
+  app.logger.debug("Entering get_events")
+  
+
+  busytimes = []
+  selected = flask.session["ids"]
+  
+  begin_date = flask.session["begin_date"]
+  end_date = flask.session["end_date"]
+      
+  begintime = flask.session['begin_time']
+  endtime = flask.session['end_time']
+  startdate = begin_date[:11] + begintime[11:19] + begin_date[19:]
+  enddate = end_date[:11] + endtime[11:19] + end_date[19:]
+  app.logger.debug("TIME{}".format(startdate))
+  
+  for id in selected:
+      
+      events = service.events().list(calendarId=id, singleEvents=True, orderBy='startTime' ).execute()["items"]
+      if events == []:
+          flask.flash("No events.")
+      
+      # Get busy times
+      busyevents = busy_times(events, startdate, enddate)
+      
+      # Get time blocks
+      freeblocks = available(startdate, enddate)
+      
+      # Get free times
+      freetimeslist = []
+      finalfreelist = []
+      
+      if busyevents == []:
+        freetimeslist = freeblocks
+      
+      for block in freeblocks:
+          busy_events = busy_times(events, block['start'], block['end'])
+          freetimes = free_times(block, busy_events)
+          app.logger.debug("Freetimes: {}".format(freetimes))
+          if freetimes != []:
+              for time in freetimes:
+                  freetimeslist.append(time)
+    
+      finalfreelist.append({ "id": id, "free_times":freetimeslist})
+      busytimes.append({ "id": id, "events": busyevents})
+    
+  flask.session['free'] = finalfreelist
+    
+  return busytimes 
 
 
 def cal_sort_key( cal ):
